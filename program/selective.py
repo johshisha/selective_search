@@ -1,0 +1,105 @@
+# -*- coding: utf-8 -*-
+import Image
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+import matplotlib.image as mpimg
+import selectivesearch,sys,os
+sys.path.append('/home/dl-box/study/.package/python_util/')
+import util,Feature
+
+class Feature_from_array(Feature.Classify):
+    def classify(self, input_file):
+        inputs = [input_file]
+        predictions = self.classifier.predict(inputs)
+        result = self.judge_result(predictions)
+
+        score = sorted(predictions[0], reverse=True)
+        return result, score[0]
+
+def main(argv):
+    filename = argv[1]
+
+    classify = Feature_from_array('imagenet')
+
+    images, candidates = selective_image(filename)
+
+    results = [classify.classify(image) for image in images]
+    #print results
+
+    img = plt.imread(filename)
+    fig, ax = plt.subplots(1,1)
+    ax.imshow(img)
+
+    labels = []
+    boxes = []
+    for res, locates in zip(results,candidates):
+        if res[1] >= 0.5:
+            labels.append(res[0])
+            boxes.append(locates)
+
+    ax = plot_boxes(ax,boxes,labels)
+    plt.show()
+
+def plot_boxes(ax, boxes, labels=None):
+    """ax への矩形とラベルの追加"""
+    if labels is None:
+        labels = [None] * len(boxes)
+        
+    history = []
+    from matplotlib.patches import FancyBboxPatch    
+    for box, label in zip(boxes, labels):
+        coords = (box[0], box[1])
+        b = FancyBboxPatch(coords, box[2], box[3],
+                            boxstyle="square,pad=0.", ec="b", fc="none", lw=0.5)             
+        mindist = 100000
+        if len(history) > 0:
+            mindist = min([sum((np.array(box) - np.array(h)) ** 2) for h in history])
+        # ほぼ重なる矩形は描画しない
+        if mindist > 30000:
+            if label is not None:
+                ax.text(coords[0], coords[1], label, color='b')
+            ax.add_patch(b)
+            history.append(box)
+    
+    return ax
+
+def selective_image(filename):
+    # loading lena image
+    pil_img = Image.open(filename).convert('RGB')
+    img = np.asarray(pil_img)
+
+    # perform selective search
+    img_lbl, regions = selectivesearch.selective_search(
+        img, scale=500, sigma=0.6, min_size=10)
+
+    candidates = set()
+    for r in regions:
+        # excluding same rectangle (with different segments)
+        if r['rect'] in candidates:
+            continue
+        # excluding regions smaller than 2000 pixels
+        if r['size'] < 2000:
+            continue
+        # distorted rects
+        x, y, w, h = r['rect']
+        if w / h > 1.2 or h / w > 1.2:
+            continue
+        candidates.add(r['rect'])
+
+    images = [crop_image(pil_img,locate) for locate in candidates]
+    array_images = map(np.asarray,images)
+    normed = map(lambda x:x/255.0, array_images)
+    return normed, candidates
+
+def crop_image(img,locates):
+    x,y,w,h = locates
+    cropped = img.crop((x,y,x+w+1,y+h+1))
+    resized = cropped.resize((256,256), Image.ANTIALIAS)
+    return resized
+    
+    
+
+if __name__ == "__main__":
+    main(sys.argv)
+
